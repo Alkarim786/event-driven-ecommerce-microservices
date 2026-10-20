@@ -1,0 +1,36 @@
+server:
+  port: ${PORT:8083}
+
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments}
+    username: ${DB_USER:shop}
+    password: ${DB_PASSWORD:shop}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+  flyway:
+    locations: classpath:db/messaging,classpath:db/payments,classpath:db/vendor/{vendor}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+        linger.ms: 2
+    consumer:
+      auto-offset-reset: earliest
+    listener:
+      concurrency: ${LISTENER_CONCURRENCY:3}
+
+shop:
+  outbox:
+    poll-interval: ${OUTBOX_POLL_INTERVAL:100ms}
+    chaos-duplicate-rate: ${OUTBOX_CHAOS_DUPLICATE_RATE:0}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

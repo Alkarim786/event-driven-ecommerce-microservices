@@ -1,0 +1,114 @@
+# One command: `docker compose up -d --build`
+# Order API: http://localhost:8081  ·  Inventory: 8082  ·  Payments: 8083  ·  Notifications: 8084
+# Benchmark: `docker compose --profile bench run --rm loadtest`
+
+x-service: &service
+  build:
+    context: .
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+  mem_limit: 512m
+
+x-env: &env
+  DB_USER: ${POSTGRES_USER:-shop}
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-shop}
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  OUTBOX_POLL_INTERVAL: ${OUTBOX_POLL_INTERVAL:-100ms}
+  OUTBOX_CHAOS_DUPLICATE_RATE: ${OUTBOX_CHAOS_DUPLICATE_RATE:-0}
+  LISTENER_CONCURRENCY: ${LISTENER_CONCURRENCY:-3}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shop}
+      POSTGRES_DB: shop
+    volumes:
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shop} -d notifications"]
+      interval: 3s
+      retries: 30
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
+    ports: ["29092:29092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      retries: 30
+
+  order-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: order-service } }
+    image: shop/order-service:local
+    environment:
+      <<: *env
+      DB_URL: jdbc:postgresql://postgres:5432/orders
+    ports: ["8081:8081"]
+
+  inventory-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: inventory-service } }
+    image: shop/inventory-service:local
+    environment:
+      <<: *env
+      DB_URL: jdbc:postgresql://postgres:5432/inventory
+    ports: ["8082:8082"]
+
+  payment-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: payment-service } }
+    image: shop/payment-service:local
+    environment:
+      <<: *env
+      DB_URL: jdbc:postgresql://postgres:5432/payments
+    ports: ["8083:8083"]
+
+  notification-service:
+    <<: *service
+    build: { context: ., args: { SERVICE: notification-service } }
+    image: shop/notification-service:local
+    environment:
+      <<: *env
+      DB_URL: jdbc:postgresql://postgres:5432/notifications
+    ports: ["8084:8084"]
+
+  # Load generator runs INSIDE the compose network, so numbers exclude Docker Desktop's
+  # Windows→WSL2 port-forwarding overhead.
+  loadtest:
+    image: python:3.13-alpine
+    profiles: ["bench"]
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["python", "-u", "/scripts/loadtest.py"]
+    environment:
+      ORDER_URL: http://order-service:8081
+      INVENTORY_URL: http://inventory-service:8082
+      PAYMENT_URL: http://payment-service:8083
+      NOTIFICATION_URL: http://notification-service:8084
+
+volumes:
+  pgdata:

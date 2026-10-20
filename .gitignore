@@ -1,0 +1,29 @@
+# Build output
+target/
+*.class
+*.jar
+!**/.mvn/wrapper/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# Python
+__pycache__/
+.venv/
+venv/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Bench output, datasets, bundles
+results/
+*.bundle
+*.zip
+*.log
